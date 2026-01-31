@@ -183,75 +183,43 @@ func deleteProduk(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	viper.AutomaticEnv()
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+    viper.AutomaticEnv()
+    viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	if _, err := os.Stat(".env"); err == nil {
-		viper.SetConfigFile(".env")
-		_ = viper.ReadInConfig()
-	}
+    if _, err := os.Stat(".env"); err == nil {
+        viper.SetConfigFile(".env")
+        _ = viper.ReadInConfig()
+    }
 
-	config := Config{
-    Port:   "8081",
-    DBConn: "postgresql://postgres.qnvpvlbrbxrnhjweiozc:hWhGCvPkpDyJvcd3@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require",
-	}
+    // ✅ Ambil dari environment variable (Railway akan inject PORT)
+    config := Config{
+        Port:   viper.GetString("PORT"),
+        DBConn: viper.GetString("DB_CONN"),
+    }
 
-	fmt.Println("===== DEBUG =====")
-	fmt.Println("PORT:", config.Port)
-	fmt.Println("DB_CONN:", config.DBConn)
-	fmt.Println("=================")
+    fmt.Println("===== DEBUG =====")
+    fmt.Println("PORT:", config.Port)
+    fmt.Println("DB_CONN:", config.DBConn)
+    fmt.Println("=================")
 
-	if config.Port == "" {
-		config.Port = "8080"
-	}
+    // ✅ Default port 8080 jika tidak ada
+    if config.Port == "" {
+        config.Port = "8080"
+    }
 
-	if err := initDB(config.DBConn); err != nil {
-		log.Fatal("Failed to initialize database:", err)
-	}
-	defer db.Close()
+    if err := initDB(config.DBConn); err != nil {
+        log.Fatal("Failed to initialize database:", err)
+    }
+    defer db.Close()
 
-	http.HandleFunc("/api/produk/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			getProdukByID(w, r)
-		} else if r.Method == "PUT" {
-			updateProduk(w, r)
-		} else if r.Method == "DELETE" {
-			deleteProduk(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+    // ... (handler code tetap sama)
 
-	http.HandleFunc("/api/produk", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			getAllProduk(w, r)
-		} else if r.Method == "POST" {
-			createProduk(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+    fmt.Println("🚀 Server running di 0.0.0.0:" + config.Port)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "OK",
-			"message": "Welcome to Kasir API - Powered by Supabase",
-		})
-	})
-
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "OK",
-			"message": "API is Running",
-		})
-	})
-
-	fmt.Println("🚀 Server running di localhost:" + config.Port)
-
-	if err := http.ListenAndServe(":"+config.Port, nil); err != nil {
-		log.Fatal("Failed to start server:", err)
-	}
+    // ✅ PENTING: Listen di 0.0.0.0, bukan localhost!
+    if err := http.ListenAndServe("0.0.0.0:"+config.Port, nil); err != nil {
+        log.Fatal("Failed to start server:", err)
+    }
 }
+
 
