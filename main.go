@@ -216,6 +216,45 @@ func main() {
 
     fmt.Println("🚀 Server running di 0.0.0.0:" + config.Port)
 
+	http.HandleFunc("/api/produk/", func(w http.ResponseWriter, r *http.Request) {
+    if r.Method == "GET" {
+        getProdukByID(w, r)
+    } else if r.Method == "PUT" {
+        updateProduk(w, r)
+    } else if r.Method == "DELETE" {
+        deleteProduk(w, r)
+    } else {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
+})
+
+http.HandleFunc("/api/produk", func(w http.ResponseWriter, r *http.Request) {
+    if r.Method == "GET" {
+        getAllProduk(w, r)
+    } else if r.Method == "POST" {
+        createProduk(w, r)
+    } else {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
+})
+
+http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{
+        "status":  "OK",
+        "message": "Welcome to Kasir API - Powered by Supabase",
+    })
+})
+
+http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{
+        "status":  "OK",
+        "message": "API is Running",
+    })
+})
+
+
     // ✅ PENTING: Listen di 0.0.0.0, bukan localhost!
     if err := http.ListenAndServe("0.0.0.0:"+config.Port, nil); err != nil {
         log.Fatal("Failed to start server:", err)
