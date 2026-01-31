@@ -1,27 +1,54 @@
 package main
 
 import (
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "strconv"
-    "strings"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/spf13/viper"
+	_ "github.com/lib/pq"
 )
 
-type Produk struct {
-    ID    int     `json:"id"`
-    Nama  string  `json:"nama"`
-    Harga float64 `json:"harga"`
-    Stok  int     `json:"stok"`
+type Product struct {
+	ID    int    `json:"id"`
+	Nama  string `json:"name"`
+	Harga int    `json:"price"`
+	Stok  int    `json:"stock"`
 }
 
-var produk = []Produk{
-    {ID: 1, Nama: "Indomie Godog", Harga: 3500, Stok: 10},
-    {ID: 2, Nama: "Vit 1000ml", Harga: 3000, Stok: 40},
-	{ID: 3, Nama: "Kecap", Harga: 12000, Stok: 20},
+type Config struct {
+	Port   string `mapstructure:"PORT"`
+	DBConn string `mapstructure:"DB_CONN"`
 }
 
-func getProdukByID(w http.ResponseWriter, r *http.Request) {  // ← Hapus kurung tutup
+var db *sql.DB
+
+func initDB(connString string) error {
+    fmt.Println("Trying to connect with:", connString) // DEBUG
+    
+    var err error
+    db, err = sql.Open("postgres", connString)
+    if err != nil {
+        return fmt.Errorf("error opening database: %w", err)
+    }
+
+    fmt.Println("Database opened, now pinging...") // DEBUG
+    
+    if err := db.Ping(); err != nil {
+        return fmt.Errorf("error connecting to database: %w", err)
+    }
+
+    fmt.Println("✅ Database connection established (Supabase PostgreSQL)")
+    return nil
+}
+
+
+func getProdukByID(w http.ResponseWriter, r *http.Request) {
     idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
     id, err := strconv.Atoi(idStr)
     if err != nil {
@@ -29,127 +56,202 @@ func getProdukByID(w http.ResponseWriter, r *http.Request) {  // ← Hapus kurun
         return
     }
 
-    for _, p := range produk {
-        if p.ID == id {
-            w.Header().Set("Content-Type", "application/json")
-            json.NewEncoder(w).Encode(p)
+    var produk Product
+    query := "SELECT id, name, price, stock FROM products WHERE id = $1"  // ✅ FIX: Tambahkan kutip penutup
+    err = db.QueryRow(query, id).Scan(&produk.ID, &produk.Nama, &produk.Harga, &produk.Stok)
+    if err == sql.ErrNoRows {
+        http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
+        return
+    } else if err != nil {
+        http.Error(w, "Database error", http.StatusInternalServerError)
+        log.Println("Error querying database:", err)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(produk)
+}
+
+
+func getAllProduk(w http.ResponseWriter, r *http.Request) {
+    query := "SELECT id, name, price, stock FROM products ORDER BY id"
+    rows, err := db.Query(query)
+    if err != nil {
+        http.Error(w, "Database error", http.StatusInternalServerError)
+        log.Println("Error querying database:", err)
+        return
+    }
+    defer rows.Close()
+
+    var produkList []Product  // ✅ FIX: Ganti "Products" → "Product"
+    for rows.Next() {
+        var p Product  // ✅ FIX: Ganti "Products" → "Product"
+        if err := rows.Scan(&p.ID, &p.Nama, &p.Harga, &p.Stok); err != nil {
+            http.Error(w, "Error scanning data", http.StatusInternalServerError)
+            log.Println("Error scanning row:", err)
             return
         }
+        produkList = append(produkList, p)
     }
-    http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(produkList)
+}
+
+
+func createProduk(w http.ResponseWriter, r *http.Request) {
+	var produk Product
+	err := json.NewDecoder(r.Body).Decode(&produk)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	query := "INSERT INTO products (name, price, stock) VALUES ($1, $2, $3) RETURNING id"
+	err = db.QueryRow(query, produk.Nama, produk.Harga, produk.Stok).Scan(&produk.ID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		log.Println("Error inserting data:", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(produk)
 }
 
 func updateProduk(w http.ResponseWriter, r *http.Request) {
-    idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
-    id, err := strconv.Atoi(idStr)
-    if err != nil {
-        http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
-        return
-    }
-
-    var updatedProduk Produk
-    err = json.NewDecoder(r.Body).Decode(&updatedProduk)
-    if err != nil {
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
-
-    for i := range produk {
-        if produk[i].ID == id {
-			updatedProduk.ID = id
-            produk[i] = updatedProduk
-
-            w.Header().Set("Content-Type", "application/json")
-            json.NewEncoder(w).Encode(updatedProduk)
-            return
-        }
-    }  // ← Tambahkan kurung tutup loop
-    
-    http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
-}  // tutup kurung
-
-func deleteProduk(w http.ResponseWriter, r *http.Request) {
-	// get id
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
-	// ganti id int
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
 		return
 	}
-	// loop produk cari ID, dapet index yang mau dihapus
-	for i, p := range produk {
-		if p.ID == id {
-			// bikin slice baru dengan data sebelum dan sesudah index
-			produk = append(produk[:i], produk[i+1:]...)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"message": "Produk berhasil dihapus",
-			})
-			
-			return
-		}
+
+	var produk Product
+	err = json.NewDecoder(r.Body).Decode(&produk)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
 	}
 
-	http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
+	query := "UPDATE products SET name = $1, price = $2, stock = $3 WHERE id = $4"
+	result, err := db.Exec(query, produk.Nama, produk.Harga, produk.Stok, id)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		log.Println("Error updating data:", err)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
+		return
+	}
+
+	produk.ID = id
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(produk)
+}
+
+func deleteProduk(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/produk/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid Produk ID", http.StatusBadRequest)
+		return
+	}
+
+	query := "DELETE FROM products WHERE id = $1"
+	result, err := db.Exec(query, id)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		log.Println("Error deleting data:", err)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Produk tidak ditemukan", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Produk berhasil dihapus",
+	})
 }
 
 func main() {
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// GET localhost:8080/api/produk/{id}
-	// PUT localhost:8080/api/produk/{id}
-	// DELETE localhost:8080/api/produk/{id}
-    http.HandleFunc("/api/produk/", func(w http.ResponseWriter, r *http.Request) {
-        if r.Method == "GET" {
-            getProdukByID(w, r)        
-        } else if r.Method == "PUT" {
-            updateProduk(w, r)
-        } else if r.Method == "DELETE" {
-            deleteProduk(w, r)
-        }
-    })
-    
-    http.HandleFunc("/api/produk", func(w http.ResponseWriter, r *http.Request) {
-        if r.Method == "GET" {
-            w.Header().Set("Content-Type", "application/json")
-            json.NewEncoder(w).Encode(produk)
-        } else if r.Method == "POST" {
-            var produkBaru Produk
-            err := json.NewDecoder(r.Body).Decode(&produkBaru)
-            if err != nil {
-                http.Error(w, "Invalid request", http.StatusBadRequest) 
-                return          
-            }
+	if _, err := os.Stat(".env"); err == nil {
+		viper.SetConfigFile(".env")
+		_ = viper.ReadInConfig()
+	}
 
-            produkBaru.ID = len(produk) + 1
-            produk = append(produk, produkBaru)
+	config := Config{
+    Port:   "8081",
+    DBConn: "postgresql://postgres.qnvpvlbrbxrnhjweiozc:hWhGCvPkpDyJvcd3@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require",
+	}
 
-            w.Header().Set("Content-Type", "application/json")
-            w.WriteHeader(http.StatusCreated)
-            json.NewEncoder(w).Encode(produkBaru)
-        }
-    })
-    
-    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(map[string]string{
-            "status":  "OK",
-            "message": "Welcome to API",
-        })
-    })
+	fmt.Println("===== DEBUG =====")
+	fmt.Println("PORT:", config.Port)
+	fmt.Println("DB_CONN:", config.DBConn)
+	fmt.Println("=================")
 
-    http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(map[string]string{
-            "status":  "OK",
-            "message": "API is Running",
-        })
-    })
-    
-    fmt.Println("Server running di localhost:8080")
-    
-    err := http.ListenAndServe(":8080", nil)
-    if err != nil {
-        fmt.Println("gagal running server")
-    }
+	if config.Port == "" {
+		config.Port = "8080"
+	}
+
+	if err := initDB(config.DBConn); err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+	defer db.Close()
+
+	http.HandleFunc("/api/produk/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			getProdukByID(w, r)
+		} else if r.Method == "PUT" {
+			updateProduk(w, r)
+		} else if r.Method == "DELETE" {
+			deleteProduk(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/api/produk", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			getAllProduk(w, r)
+		} else if r.Method == "POST" {
+			createProduk(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "OK",
+			"message": "Welcome to Kasir API - Powered by Supabase",
+		})
+	})
+
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "OK",
+			"message": "API is Running",
+		})
+	})
+
+	fmt.Println("🚀 Server running di localhost:" + config.Port)
+
+	if err := http.ListenAndServe(":"+config.Port, nil); err != nil {
+		log.Fatal("Failed to start server:", err)
+	}
 }
+
